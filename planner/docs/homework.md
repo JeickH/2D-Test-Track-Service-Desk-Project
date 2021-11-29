@@ -134,31 +134,46 @@ If you finish successfully all the points, you must have a window like this (wit
 Respond below every questions:
 
 1. [Python] Why the robot's image gets distorted when is turning?
+R./ Because the code made image rotations over the other image rotation instead reload 
+the original image and only make a single rotation.
 
 2. [Python] are Python packages compiled as C++ packages?
+R./ No, They are not. Python is an interpreted language, so it doesn’t compile directly to machine 
+code. It is interpreted by other programs, in this case C++, and the machine code is provided by 
+this other program.
 
 3. [Python] Why with some code errors in some nodes the logs are not printed?
 
 4. [Control] What other turn or speed profile would you implement, why, and what are the benefits?
+R./ I would implement a S-curve speed profile, because this motion profile reduces the jerk 
+produced by the change of acceleration. This approach is smoother than trapezoidal one.
 
 5. [C++] What is the mean of the number "15" used in the pthread_kill inside the destructor method?
+R./ The number “15” is in the position of sig argument of pthread_kill method. Sig argument 
+is used to set the default actions in case of a thread error. In this case, with 15, 
+the pthread_kill process send the signal SIGTERM to the thread.
 
 6. [C++] Why are we using UniquePointer instead of SharedPointers to publish a ROS2 message?
+R./ This configuration with UniquePointer allow us to have more security because source pointer has to give ownership to the destination pointer and also is an object that doesn't allow be copied
 
 7. [C++] Why are we using a m_multi_sound variable? Explain ...
 
 8. [C++] Why are we freeing the memory allocated by raw pointer "buff" variable and not freeing the memory allocated by the Shared and Unique Pointers? (HARD)
+R./ Because in this case is useful to clean the buffer that transport the data but we want to keep the UniquePtr and SharedPtr memory resource.
 
 10. [Docker] Explain with your own words what is the instructions `apt-get autoremove && apt-get clean -y for?`
+R./ that command on Dockerfile allows us to remove packages that are no longer needed or damaged 
 
 11. [Docker] If you modify a layer what happen with the previous and the next ones?
+R./ If we modify a layer, the before layers won’t be influenced by the modification and won’t run again.On the other hand, following layers will be influenced by the modification and will execute again.
 
 12. [Docker] Can we change the basic image (`FROM ubuntu:20.04`) from the docker file to another?
+R./ No, we cannot change the base image because that would cause compatibility issues, for instance, if we install a library only supported on ubuntu 20 distribution, if we change the base image, we will get an error. 
 
 Next questions is after you finish the project, it doesn't give points but we really appreciate you feedback:
 * What do you think about this project? is it hard or enough? is it to complicated, is it well structure, explanations and instructions are clear?
 
----
+---The project is well structured and allows you to demonstrate and challenge your programming skills in python and c++. The project also has flexibility between base software so it is easy and fast to start working on it 
 <!-- ---------------------------------------------------------------------- -->
 ## **EXTRA-HOMEWORK**
 

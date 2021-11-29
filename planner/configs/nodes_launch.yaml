@@ -14,7 +14,7 @@ NODE_GRAPHICS:
   output: screen
   package: graphics
 NODE_INTERFACES:
-  launch: 0
+  launch: 1
   node_executable: interfaces_node
   output: screen
   package: interfaces

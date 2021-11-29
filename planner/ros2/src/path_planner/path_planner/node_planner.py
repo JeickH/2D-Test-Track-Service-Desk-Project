@@ -10,9 +10,14 @@ Code Information:
 # =============================================================================
 import numpy as np
 import yaml
+import math
 import csv
 import sys
 import os
+import copy
+import cv2
+
+from datetime import datetime
 
 import rclpy
 from rclpy.callback_groups import ReentrantCallbackGroup
@@ -22,7 +27,7 @@ from rclpy.node import Node
 
 from rclpy.qos import qos_profile_sensor_data
 
-from std_msgs.msg import Int32
+from std_msgs.msg import Int32, Bool
 from std_msgs.msg import Int8
 
 from utils.python_utils import printlog
@@ -96,6 +101,18 @@ class PlannerNode(Node):
         self._FORWARE_CRTL_POINTS = float(os.getenv("FORWARE_CRTL_POINTS", default=30))
         self._TURN_TIME = float(os.getenv("TURN_TIME", default=3.0))
 
+        # Read the past routines data and print the header if necessary
+        self.csv_record_path = "/workspace/planner/record/record.csv"
+        self.csv_data = []
+        self.header = ["routine", "completed", "distance"]
+        with open(self.csv_record_path, "r") as f:
+            csv_reader = csv.reader(f)
+            for line in csv_reader:
+                self.csv_data.append(line)
+        if self.csv_data[0] == self.header:
+            pass
+        else:
+            self.csv_data.insert(0, self.header)
         # ---------------------------------------------------------------------
         # Map features
         self.map_points = []  # Landmarks or keypoints in map
@@ -105,6 +122,7 @@ class PlannerNode(Node):
         self.way_points = {}  # List of waypoints in the path planning routine
 
         self._in_execution = False
+        self.cancel_rout = False
 
         # Read routines from the yaml file in the configs folder
         self.routines = read_yaml_file(
@@ -131,6 +149,15 @@ class PlannerNode(Node):
             qos_profile=qos_profile_sensor_data,
             callback_group=self.callback_group,
         )
+        # cancel routine msg subscriber
+        self.sub_cancel_rout = self.create_subscription(
+            msg_type=Bool,
+            topic="/graphics/cancel_routine",
+            callback=self.cb_cancel_rout,
+            qos_profile=qos_profile_sensor_data,
+            callback_group=self.callback_group,
+        )
+        self.sub_cancel_rout
 
         # ---------------------------------------------------------------------
         # Publishers
@@ -166,6 +193,10 @@ class PlannerNode(Node):
                 msg="No services for robot actions, {}".format(e),
                 msg_type="ERROR",
             )
+
+    def cb_cancel_rout(self, data):
+        self.cancel_rout = data.data
+        self._in_execution = False
 
     def cb_kiwibot_status(self, msg: Kiwibot) -> None:
         """
@@ -208,6 +239,8 @@ class PlannerNode(Node):
                 return
 
             self._in_execution = True
+            success = 0
+            self.cancel_rout
 
             # Check that the routine in received exists in the routines list
             if msg.data in self.routines.keys():
@@ -338,16 +371,29 @@ class PlannerNode(Node):
                     move_resp = self.cli_robot_move.call(self.robot_move_req)
 
                 # -------------------------------------------------------
-                if not self._in_execution:
+                if not self._in_execution and self.cancel_rout:
+                    # write on csv the routine failed
+                    row = [str(msg.data), 0, str(round(self.kiwibot_state.dist, 2))]
+                    self.csv_data.append(row)
+                    with open(self.csv_record_path, "w") as f:
+                        writer = csv.writer(f)
+                        writer.writerows(self.csv_data)
+
                     printlog(
                         msg=f"routine {msg.data} execution has been stopped",
                         msg_type="WARN",
                     )
-                else:
+                elif not self.cancel_rout:
                     printlog(
                         msg=f"routine {msg.data} has finished",
                         msg_type="OKGREEN",
                     )
+                    # write successful routine
+                    row = [str(msg.data), 1, str(round(self.kiwibot_state.dist, 2))]
+                    self.csv_data.append(row)
+                    with open(self.csv_record_path, "w") as f:
+                        writer = csv.writer(f)
+                        writer.writerows(self.csv_data)
 
                 # -------------------------------------------------------
                 self.pub_speaker.publish(Int8(data=3))
@@ -360,6 +406,13 @@ class PlannerNode(Node):
                 return
 
         except Exception as e:
+            # write failed routine
+            if self._in_execution:
+                row = [str(msg.data), 0, str(round(self.kiwibot_state.dist, 2))]
+                self.csv_data.append(row)
+                with open(self.csv_record_path, "w") as f:
+                    writer = csv.writer(f)
+                    writer.writerows(self.csv_data)
             exc_type, exc_obj, exc_tb = sys.exc_info()
             fname = os.path.split(exc_tb.tb_frame.f_code.co_filename)[1]
             printlog(
@@ -478,6 +531,46 @@ class PlannerNode(Node):
         # "t": [float](time for angle a),
         # "dt": [float](sept of time for angle a, is constant element)
         # Do not forget and respect the keys names
+        # [FEAT]: calculate the waypoints between two keypoints with a trapezoidal profile
+        # calculate time for accelerate and decelerate
+        time_ac_da = pt * time
+        step_time = time / n
+        # calculate total distance
+        total_distx = dst[0] - src[0]
+        total_disty = dst[1] - src[1]
+        # initialize time counter
+        t = 0
+        v_max_x = total_distx / ((1 - pt) * time)
+        v_max_y = total_disty / ((1 - pt) * time)
+        ac_value_x = v_max_x / time_ac_da
+        ac_value_y = v_max_y / time_ac_da
+
+        act_pos = [self.kiwibot_state.pos_x, self.kiwibot_state.pos_y]
+        for step in range(int(n)):
+            idx = int(step)
+            t += step_time
+            if t > 0 and t <= time_ac_da:
+                y = ac_value_y * t
+                x = ac_value_x * t
+            elif t > time_ac_da and t <= time - time_ac_da:
+                y = v_max_y
+                x = v_max_x
+            elif t > time - time_ac_da:
+                y = v_max_y - ac_value_y * (t - time * 0.7)
+                x = v_max_x - ac_value_x * (t - time * 0.7)
+            act_pos[0] += x * step_time
+            act_pos[1] += y * step_time
+            pt = (
+                int(act_pos[0]),
+                int(act_pos[1]),
+            )
+            w_point = {
+                "idx": int(step),
+                "pt": pt,
+                "t": float(t),
+                "dt": float(step_time),
+            }
+            way_points.append(w_point)
 
         # ---------------------------------------------------------------------
 
@@ -515,6 +608,36 @@ class PlannerNode(Node):
         # "t": [float](time for angle a),
         # "dt": [float](sept of time for angle a, is constant element)
         # Do not forget and respect the keys names
+        # [FEAT]: Calculate the turn points with a trapezoidal profile to turn the robot image
+        # calculate time for accelerate and decelerate
+        time_ac_da = pt * time
+        step_time = time / n
+        # time counter
+        t = 0
+        # radious to convert linear velocity to angular velocity- empirically founded
+        rad = 0.706
+        v_max = dst / ((1 - pt) * time)
+        ac_value = v_max / time_ac_da
+        # act_yaw = self.kiwibot_state.yaw
+        act_yaw = 0
+        # print("act_yaw {}".format(act_yaw))
+        # print(f"dist {dst}")
+        for step in range(int(n)):
+            t += step_time
+            if t > 0 and t <= time_ac_da:
+                a = ac_value * t
+            elif t > time_ac_da and t <= time - time_ac_da:
+                a = v_max
+            elif t > time - time_ac_da:
+                a = v_max - ac_value * (t - time * 0.7)
+            act_yaw += a * step_time * rad
+            t_point = {
+                "idx": int(step),
+                "a": float(act_yaw),
+                "t": float(t),
+                "dt": float(step_time),
+            }
+            turn_points.append(t_point)
 
         # ---------------------------------------------------------------------
 

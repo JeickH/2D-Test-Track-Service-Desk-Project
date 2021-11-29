@@ -24,7 +24,7 @@ from rclpy.node import Node
 from usr_srvs.srv import Move
 from usr_srvs.srv import Turn
 
-from std_msgs.msg import Int8
+from std_msgs.msg import Int8, Bool
 
 from usr_msgs.msg import Kiwibot as kiwibot_status
 
@@ -98,6 +98,17 @@ class KiwibotNode(Node):
             callback_group=self.callback_group,
         )
 
+        # Subscribers
+        # cancel routine msg subscriber
+        self.sub_cancel_rout = self.create_subscription(
+            msg_type=Bool,
+            topic="/graphics/cancel_routine",
+            callback=self.cb_cancel_rout,
+            qos_profile=qos_profile_sensor_data,
+            callback_group=self.callback_group,
+        )
+        self.sub_cancel_rout
+
         # ---------------------------------------------------------------------
         # Services
 
@@ -116,6 +127,9 @@ class KiwibotNode(Node):
             self.cb_srv_robot_move,
             callback_group=self.callback_group,
         )
+
+    def cb_cancel_rout(self, data):
+        self.cancel_rout = data.data
 
     def cb_srv_robot_turn(self, request, response) -> Turn:
         """
@@ -145,8 +159,13 @@ class KiwibotNode(Node):
 
                 if self.status.yaw >= 360:
                     self.status.yaw += -360
-
-                self.pub_bot_status.publish(self.status)
+                #
+                if not self.cancel_rout:
+                    self.pub_bot_status.publish(self.status)
+                    time.sleep(turn_ref.dt)
+                else:
+                    self.pub_speaker.publish(Int8(data=0))
+                    break
 
                 time.sleep(turn_ref.dt)
 
@@ -199,7 +218,13 @@ class KiwibotNode(Node):
                 self.status.moving = True
                 self.status.time += wp.dt
 
-                self.pub_bot_status.publish(self.status)
+                # cancel routine condition
+                if not self.cancel_rout:
+                    self.pub_bot_status.publish(self.status)
+                    time.sleep(wp.dt)
+                else:
+                    self.pub_speaker.publish(Int8(data=0))
+                    break
 
                 time.sleep(wp.dt)
 

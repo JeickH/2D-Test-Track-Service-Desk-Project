@@ -12,6 +12,8 @@ Speaker::Speaker(rclcpp::NodeOptions &options) : Node("speaker", "interfaces", o
     RCLCPP_DEBUG(this->get_logger(), "Speaker Contructor");
 
     auto default_qos = rclcpp::QoS(rclcpp::SystemDefaultsQoS());
+    //QOS profile compatibility on subscriber m_speaker_sub 
+    auto sensor_data_qos = rclcpp::QoS(rclcpp::SensorDataQoS());
 
     // /* Publisher */
 
@@ -30,6 +32,8 @@ Speaker::Speaker(rclcpp::NodeOptions &options) : Node("speaker", "interfaces", o
     * Find Documentation here:
     * https://docs.ros.org/en/foxy/Tutorials/Writing-A-Simple-Cpp-Publisher-And-Subscriber.html#write-the-subscriber-node
     ********************************************/
+    //[FEAT]:Create the subscriber to reproduce a .wav file when receive a message
+    m_speaker_sub= this->create_subscription<std_msgs::msg::Int8>("/device/speaker/command", sensor_data_qos, std::bind(&Speaker::speakerCb, this, _1)); 
 
     /********************************************
     * END CODE 
@@ -102,7 +106,11 @@ void Speaker::speakerCb(const std_msgs::msg::Int8::SharedPtr msg)
         /********************************************
         * PLAY A DEFAULT SOUND IF NOT FOUND THE TRACK FILE
         ********************************************/
-
+        //[FEAT]:define a default sound in case the first one is not founded
+        else{
+            readfd = open((m_path + "2.wav").c_str(), O_RDONLY);
+            ambient = pthread_create(&pthread_id, NULL, (THREADFUNCPTR)&Speaker::PlaySound, this);
+        }
         /********************************************
         * END CODE 
         ********************************************/
@@ -130,8 +138,11 @@ void *Speaker::PlaySound()
     * Documentation here:
     * https://docs.ros.org/en/foxy/Tutorials/Writing-A-Simple-Cpp-Publisher-And-Subscriber.html#write-the-publisher-node
     ********************************************/
+    //[FEAT]: publish a bool value to notify when is done the process of play a sound
     std_msgs::msg::Bool::UniquePtr msg(new std_msgs::msg::Bool());
-
+    msg.reset(new std_msgs::msg::Bool());
+    msg->data=false;
+    m_done_pub->publish(std::move(msg));
     /********************************************
     * END CODE 
     ********************************************/
@@ -156,8 +167,10 @@ void *Speaker::PlaySound()
     * https://docs.ros.org/en/foxy/Tutorials/Writing-A-Simple-Cpp-Publisher-And-Subscriber.html#write-the-publisher-node
     ********************************************/
     // This is just for clean the variable name and re-initialize it.
+    //[FEAT]: publish a bool value to notify when is done the process of play a sound
     msg.reset(new std_msgs::msg::Bool());
-
+    msg->data=true;
+    m_done_pub->publish(std::move(msg));
     /********************************************
     * END CODE 
     ********************************************/

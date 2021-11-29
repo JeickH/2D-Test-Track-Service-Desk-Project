@@ -83,8 +83,8 @@ private:
     /********************************************
     * DEFINE THIS AMAZING PUBLISHER
     ********************************************/
-
-
+    //[FEAT]:Create the publisher for the signal of the node is ready to play other sound
+    rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr m_done_pub ;
 
     /********************************************
     * END CODE 

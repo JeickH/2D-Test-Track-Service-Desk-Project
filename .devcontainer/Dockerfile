@@ -293,6 +293,9 @@ RUN \
 #     && apt autoremove && apt clean -y \
 #     && rm -rf /var/lib/apt/lists/*
 
+#EXTRA POINT 1- SOURCE ROS2
+RUN source /opt/ros/foxy/setup.bash
+
 # -----------------------------------------------------------------------------
 # Switch back to dialog for any ad-hoc use of apt-get
 ENV DEBIAN_FRONTEND=

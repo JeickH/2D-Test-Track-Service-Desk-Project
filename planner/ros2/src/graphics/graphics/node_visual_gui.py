@@ -13,10 +13,11 @@ import cv2
 import copy
 import sys
 import os
+import csv
 
 from threading import Thread, Event
 
-from std_msgs.msg import Int32
+from std_msgs.msg import Int32, Bool
 
 import rclpy
 from rclpy.callback_groups import ReentrantCallbackGroup
@@ -27,6 +28,7 @@ from rclpy.node import Node
 
 from utils.python_utils import printlog
 from utils.python_utils import print_list_text
+from utils.python_utils import overlay_image
 
 from usr_msgs.msg import Planner as planner_msg
 from usr_msgs.msg import Kiwibot as kiwibot_msg
@@ -77,6 +79,12 @@ class VisualsNode(Thread, Node):
         self._kiwibot_img_path = "/workspace/planner/media/images/kiwibot.png"
         self._kiwibot_img = cv2.imread(self._kiwibot_img_path, cv2.IMREAD_UNCHANGED)
 
+        self.csv_record_path = "/workspace/planner/record/record.csv"
+        self.csv_data = []
+        self.odd_data = 0
+        self.header = ["routine", "completed", "distance"]
+        self.reset_odd = False
+
         # ---------------------------------------------------------------------
         # Subscribers
 
@@ -86,6 +94,15 @@ class VisualsNode(Thread, Node):
         # message type: planner_msg
         # callback:cb_path_planner
         # add here your solution
+        # [FEAT]:Create the subscriber for the path planner
+        self.path_planner_subs = self.create_subscription(
+            msg_type=planner_msg,
+            topic="/path_planner/msg",
+            callback=self.cb_path_planner,
+            qos_profile=qos_profile_sensor_data,
+            callback_group=self.callback_group,
+        )
+        self.path_planner_subs
 
         # ------------------------------------------
         # TODO: Implement the Kiwibot status subscriber,
@@ -93,6 +110,16 @@ class VisualsNode(Thread, Node):
         # message type: kiwibot_msg
         # callback:cb_kiwibot_status
         # add here your solution
+        # [FEAT]:Create the subscriber for the kiwibot status update
+        self.kiwibot_status_sub = self.create_subscription(
+            msg_type=kiwibot_msg,
+            topic="/kiwibot/status",
+            callback=self.cb_kiwibot_status,
+            qos_profile=qos_profile_sensor_data,
+            callback_group=self.callback_group,
+        )
+        self.kiwibot_status_sub
+
         self.msg_kiwibot = kiwibot_msg()
         self.turn_robot(heading_angle=float(os.getenv("BOT_INITIAL_YAW", default=0.0)))
         self.msg_kiwibot.pos_x = int(os.getenv("BOT_INITIAL_X", default=917))
@@ -103,14 +130,20 @@ class VisualsNode(Thread, Node):
 
         # Publisher for activating the routines
         # Uncomment
-        # self.msg_path_number = Int32()
-        # self.pub_start_routine = self.create_publisher(
-        #     msg_type=Int32,
-        #     topic="/graphics/start_routine",
-        #     qos_profile=1,
-        #     callback_group=self.callback_group,
-        # )
-
+        self.msg_path_number = Int32()
+        self.pub_start_routine = self.create_publisher(
+            msg_type=Int32,
+            topic="/graphics/start_routine",
+            qos_profile=1,
+            callback_group=self.callback_group,
+        )
+        # cancel routine publisher
+        self.pub_cancel_routine = self.create_publisher(
+            msg_type=Bool,
+            topic="/graphics/cancel_routine",
+            qos_profile=1,
+            callback_group=self.callback_group,
+        )
         # ---------------------------------------------------------------------
         self.damon = True
         self.run_event = Event()
@@ -135,7 +168,16 @@ class VisualsNode(Thread, Node):
 
         try:
             self.msg_planner = msg
-
+            cont = 0
+            # read odometer data
+            with open(self.csv_record_path, "r") as f:
+                csv_reader = csv.reader(f)
+                for line in csv_reader:
+                    self.csv_data.append(line)
+            for c in self.csv_data:
+                if cont > 0 and not self.reset_odd:
+                    self.odd_data += float(c[2])
+                cont += 1
             # Read again background image to update visuals and components
             self._win_background = cv2.imread(self._win_background_path)
             self._kiwibot_img = cv2.imread(self._kiwibot_img_path, cv2.IMREAD_UNCHANGED)
@@ -176,7 +218,9 @@ class VisualsNode(Thread, Node):
                     )
                     self.turn_robot(heading_angle=msg.yaw)
                 else:
-                    move_angle = msg.yaw - self.msg_kiwibot.yaw
+                    # move angle would be msg.yaw due to we load again the image to avoid distortion on turn_robot process
+                    # move_angle = msg.yaw - self.msg_kiwibot.yaw
+                    move_angle = msg.yaw
                     self.turn_robot(heading_angle=move_angle)
 
             self.msg_kiwibot = msg
@@ -298,6 +342,9 @@ class VisualsNode(Thread, Node):
             scale=1,
         )
 
+        # load again the robot image to avoid distortion
+        self._kiwibot_img = cv2.imread(self._kiwibot_img_path, cv2.IMREAD_UNCHANGED)
+
         # Rotate robots image
         self._kiwibot_img = cv2.warpAffine(
             src=self._kiwibot_img,
@@ -305,8 +352,9 @@ class VisualsNode(Thread, Node):
             dsize=(cols, rows),
             flags=cv2.INTER_CUBIC,
         )
-    
+
     # TODO: Draw the robot
+    # [FEAT]:Create the process draw_robot to overlay the robot image over the background image
     def draw_robot(
         self, l_img: np.ndarray, s_img: np.ndarray, pos: tuple, transparency=1.0
     ) -> np.ndarray:
@@ -322,9 +370,10 @@ class VisualsNode(Thread, Node):
         """
 
         # -----------------------------------------
-        # Insert you solution here
-
-        return l_img  # remove this line when implement your solution
+        l_img = overlay_image(
+            l_img, s_img, pos=pos, transparency=transparency, src_center=True
+        )
+        return l_img
 
         # -----------------------------------------
 
@@ -343,11 +392,10 @@ class VisualsNode(Thread, Node):
         win_img, robot_coord = self.crop_map(coord=coord)
 
         # Draws robot in maps image
-        # if coord[0] and coord[1]:
-        #     win_img = self.draw_robot(
-        #         l_img=win_img, s_img=self._kiwibot_img, pos=robot_coord
-        #     )
-
+        if coord[0] and coord[1]:
+            win_img = self.draw_robot(
+                l_img=win_img, s_img=self._kiwibot_img, pos=robot_coord
+            )
         # Draw descriptions
         str_list = [
             "LandMarks: {}".format(len(self.msg_planner.land_marks)),
@@ -382,7 +430,11 @@ class VisualsNode(Thread, Node):
             fontScale=0.4,
         )
 
-        porc = "???"
+        # porc = "???"
+        if self.msg_planner.distance == 0:
+            porc = 0
+        else:
+            porc = round(self.msg_kiwibot.dist / self.msg_planner.distance * 100, 2)
         win_img = print_list_text(
             win_img,
             [f"Porc: {porc}%"],
@@ -393,9 +445,23 @@ class VisualsNode(Thread, Node):
             fontScale=0.4,
         )
 
+        # print odometer data
+
+        win_img = print_list_text(
+            win_img,
+            [f"ODD: {round(self.odd_data+self.msg_kiwibot.dist)} m"],
+            origin=(300, 430),
+            color=(0, 200, 0),
+            line_break=18,
+            thickness=1,
+            fontScale=0.4,
+        )
+
         return win_img
 
     # TODO: Drawing map descriptors
+    # [FEAT]:Create the draw_descriptors process to draw the red circles in the
+    # keypoints of the map
     def draw_descriptors(self, land_marks: list) -> None:
         """
             Draws maps keypoints in map image
@@ -407,7 +473,16 @@ class VisualsNode(Thread, Node):
 
         # -----------------------------------------
         # Insert you solution here
-        pass
+        for mark in range(len(land_marks)):
+            cv2.circle(
+                img=self._win_background,
+                center=(land_marks[mark].x, land_marks[mark].y),
+                radius=8,
+                color=(0, 0, 255),
+                thickness=3,
+            )
+
+        return self._win_background
 
         # -----------------------------------------
 
@@ -418,6 +493,7 @@ class VisualsNode(Thread, Node):
         Returns:
         """
 
+        msg_cancel = Bool()
         if self._win_background is None or self._kiwibot_img is None:
             return
 
@@ -453,12 +529,29 @@ class VisualsNode(Thread, Node):
                         msg=f"Code is broken here",
                         msg_type="WARN",
                     )
-                    continue
+                    # continue
                     printlog(
                         msg=f"Routine {chr(key)} was sent to path planner node",
                         msg_type="INFO",
                     )
+                    msg_cancel.data = False
+                    self.pub_cancel_routine.publish(msg_cancel)
                     self.pub_start_routine.publish(Int32(data=int(chr(key))))
+                # key 8 = backspace in ascii table
+                elif key == 8:
+                    printlog(
+                        msg=f"Routine Canceled",
+                        msg_type="INFO",
+                    )
+                    msg_cancel.data = True
+                    self.pub_cancel_routine.publish(msg_cancel)
+                elif key == 114:
+                    printlog(
+                        msg=f"odometer reseted",
+                        msg_type="INFO",
+                    )
+                    self.reset_odd = True
+                    self.odd_data = 0
                 else:
                     printlog(
                         msg=f"No action for key {chr(key)} -> {key}",
